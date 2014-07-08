@@ -1,0 +1,74 @@
+#!/usr/bin/perl
+use Cwd;
+use Cwd 'abs_path';
+use Getopt::Long;
+use strict;
+
+sub cmd{
+    my $cmd = shift;
+    print "$cmd\n";
+    return `$cmd`;
+}
+
+sub _chdir{
+    my $dir = shift;
+    $dir =~ s/\s+$//;
+    my $old =`pwd`;
+    chomp($old);
+    chdir $dir;
+    my $new = `pwd`;
+    chomp($new);
+    print "cd $new\n";
+}
+
+# http://rchgsa.ibm.com/projects/e/emsol/ccs/build/driver/osee-master/openstack/D20130412-1052-2012-1-GA-REBASE-KEEP
+
+sub getrpms{
+    my $url = shift;
+    cmd("rm -f index.html") if (-f 'index.html');
+    cmd("wget $url");
+
+    my $lines = cmd("cat index.html|grep '<A HREF='");
+    for my $l(split /\n/,$lines){
+        if($l =~ /<A HREF=(\S+?)\.rpm/){
+            my $n = $1;
+            $n =~ s/^"|"$//;
+            cmd("wget $url/$n.rpm");
+        }
+    }
+    cmd("rm -f index.html");
+}
+
+sub prompt{
+    print "Usage: $0 -u osee-url [-d destdir] \n";
+}
+
+sub main{
+    my ($download,$url,$help,$redownload);
+    GetOptions("hep|h!"=>\$help,"d=s" => \$download,"u=s" => \$url,"r!"=>\$redownload);
+    if(!$url or $help){
+        prompt();
+        exit;
+    }
+    my $dir = cwd;
+    $url =~ s/\/$//;
+    my $ver = (split /\//,$url)[-1];
+    if($download){
+        cmd("mkdir -p $download") if(!-d $download);
+        _chdir($download);
+    }
+    if(-d $ver){
+        if($redownload){
+            cmd("rm -rf $ver");
+        }else{
+            print "$ver already downloaded.\n";
+            exit 0;
+        }
+    }
+    cmd("mkdir $ver");
+    _chdir($ver);
+    getrpms("$url/noarch/");
+    getrpms("$url/x86_64/");
+}
+
+main();

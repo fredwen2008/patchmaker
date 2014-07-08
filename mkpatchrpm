@@ -1,0 +1,221 @@
+#!/usr/bin/perl
+use Cwd;
+use Cwd 'abs_path';
+use Getopt::Long;
+use strict;
+
+sub cmd{
+    my $cmd = shift;
+    print "$cmd\n";
+    return `$cmd`;
+}
+
+sub _chdir{
+    my $dir = shift;
+    $dir =~ s/\s+$//;
+    my $old =`pwd`;
+    chomp($old);
+    chdir $dir;
+    my $new = `pwd`;
+    chomp($new);
+    print "cd $new\n";
+}
+
+sub  rpmbuild{
+    my ($p,$v,$r,$e,$nr,$tgz,$flist,$outdir) = @_; 
+    my $spec_file_name="$p-$v-$r-patch.spec";
+    my $req = "$v-$r";
+    $req = "$e:$req" if($e);
+    my $install_script =<<'EOF';
+use Cwd 'abs_path';
+use strict;
+
+sub cmd{
+    my $cmd = shift;
+    return `$cmd`;
+}
+
+sub install{
+    my $recfile = shift;
+    my @tmp = split /\//,$recfile;
+    pop @tmp;
+    my $dirname = join '/',@tmp;
+    my $rec = cmd("cat $recfile");
+    for my $line(split /\n/,$rec){
+        if($line =~ /Change:(\S+)/i){
+            my $change= $1; 
+            cmd("cd $dirname/new;tar cf /tmp/.tmp.tar $change;tar -C / -xf /tmp/.tmp.tar;rm -f /tmp/.tmp.tar");
+        }elsif($line =~ /Add:(\S+)/i){
+            my $change = $1; 
+            cmd("cd $dirname/new;tar cf /tmp/.tmp.tar $change;tar -C / -xf /tmp/.tmp.tar;rm -f /tmp/.tmp.tar");
+        }elsif($line =~ /Remove:(\S+)/i){
+            my $change = $1; 
+            cmd("rm -rf /$change") if(-e "/$change");
+        }
+    }   
+}
+
+EOF
+    my $uninstall_script =<<'EOF';
+use Cwd 'abs_path';
+use strict;
+
+sub cmd{
+    my $cmd = shift;
+    return `$cmd`;
+}
+
+sub uninstall{
+    my $recfile = shift;
+    my @tmp = split /\//,$recfile;
+    pop @tmp;
+    my $dirname = join '/',@tmp;
+    return if(!-f $recfile);
+    my $rec = cmd("cat $recfile");
+    for my $line(split /\n/,$rec){
+        if($line =~ /Change:(\S+)/i){
+            my $change= $1; 
+            cmd("cd $dirname/old;tar cf /tmp/.tmp.tar $change;tar -C / -xf /tmp/.tmp.tar;rm -f /tmp/.tmp.tar");
+        }elsif($line =~ /Add:(\S+)/i){
+            my $change = $1; 
+            cmd("rm -rf /$change");
+        }elsif($line =~ /Remove:(\S+)/i){
+            my $change = $1; 
+            cmd("cd $dirname/old;tar cf /tmp/.tmp.tar $change;tar -C / -xf /tmp/.tmp.tar;rm -f /tmp/.tmp.tar");
+        }
+    }   
+}
+
+EOF
+    
+    my $spec = <<EOF;
+%define _buildnum $nr
+%define _topdir /tmp/.rpmbuild
+
+Name:               $p-sce
+Version:            $v
+Release:            %{_buildnum}
+Group:              Applications/System
+Summary:            This is SCE3.0 patch of $p
+URL:                http://www.openstack.org/software/openstack-storage/
+License:            ASL 2.0
+Source0:            $tgz
+BuildArch:          noarch
+
+Requires:           $p = $req
+Conflicts:          %{name} < %{version}-%{release}
+
+%description
+Patching $p for SCE3.0
+
+%prep
+%setup -q 
+
+%build
+
+%install
+
+[ "\$RPM_BUILD_ROOT" != "/" ] && rm -rf "\${RPM_BUILD_ROOT}"
+mkdir -p `dirname "\$RPM_BUILD_ROOT"`
+mkdir "\$RPM_BUILD_ROOT"
+
+cp -r %{_builddir}/%{name}-%{version}/* %{buildroot}/
+
+%pre -p /usr/bin/perl
+
+if(\$ARGV[0] == 2){
+    $uninstall_script
+    uninstall("/var/lib/%{name}-%{version}/changes.rec");
+}
+
+%post -p /usr/bin/perl
+
+$install_script
+install("/var/lib/%{name}-%{version}/changes.rec");
+
+%preun -p /usr/bin/perl
+
+if(\$ARGV[0] == 0){
+    $uninstall_script
+    uninstall("/var/lib/%{name}-%{version}/changes.rec");
+}
+
+%postun
+if [ \$1 -eq 0 ] ; then
+    rm -rf /var/lib/%{name}-%{version}
+fi
+
+%files
+
+%defattr(-,root,root)
+$flist
+
+%changelog
+EOF
+
+#run rpmbuild to create rpm patch package
+
+    cmd("mkdir -p /tmp/.rpmbuild");
+    cmd("rm -rf /tmp/.rpmbuild/*");
+    cmd("mkdir -p /tmp/.rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}");
+    cmd("cp -r $tgz /tmp/.rpmbuild/SOURCES");
+    my $fd;
+    open($fd,">","/tmp/.rpmbuild/SPECS/$spec_file_name");
+    syswrite($fd,$spec);
+    close($fd);
+    cmd("rpmbuild -ba /tmp/.rpmbuild/SPECS/$spec_file_name");
+    cmd("find /tmp/.rpmbuild/RPMS/ -name '*.rpm' -exec cp {} $outdir \\;");
+    cmd("rm -rf /tmp/.rpmbuild");
+}
+
+sub prompt{
+    print "Usage: $0 -p patchdir -o outdir\n";
+}
+
+sub main{
+    my ($help,$patchdir,$outdir);
+    GetOptions("hep|h!"=>\$help,"p=s"=>\$patchdir, "o=s"=>\$outdir);
+    if($help or !$patchdir or !$outdir){
+        prompt();
+        exit;
+    }
+    $patchdir = abs_path($patchdir);
+    $outdir = abs_path($outdir);
+    die("$patchdir does not exist\n") if(!-d $patchdir);
+    cmd("rm -rf $outdir") if(-d $outdir);
+    cmd("mkdir -p $outdir");
+
+
+    my $dirs = cmd("ls $patchdir");
+    my @dirs = split /\n/,$dirs;
+    for my $dir(@dirs){
+        next if(!-d "$patchdir/$dir");
+        next if(!-f "$patchdir/$dir/changes.rec");
+        my $size = cmd("ls -l $patchdir/$dir/changes.rec|gawk '{print \$5}'");
+        $size =~ s/\s+$//;
+        next if(!$size);
+        my ($p,$v,$r,$e) = split /--/,$dir;
+        my $nr = cmd('date +%Y%m%d%H%M%S');
+        cmd("rm -rf /tmp/.rpmbuild") if(-d "/tmp/.rpmbuild");
+        cmd("rm -rf /tmp/.makingrpm") if(-d "/tmp/.makingrpm");
+
+        my $dir1 = "/tmp/.makingrpm/$p-sce-$v/var/lib/$p-sce-$v";
+        cmd("mkdir -p $dir1");
+        cmd("cd $patchdir/$dir;tar cvfz /tmp/.tmp.tgz .;cd $dir1;tar xvfz /tmp/.tmp.tgz;rm -f /tmp/.tmp.tgz");
+        _chdir("/tmp/.makingrpm/");
+        cmd("rm -f $p-sce-$v-$r.tar.gz") if(-f "$p-sce-$v-$r.tar.gz");
+        my $flist = cmd("cd $p-sce-$v;find . -type f ");
+        my @flist = split /\n/,$flist;
+        for my $f(@flist){
+            $f =~ s/^\.//;
+        }
+        my $files= join "\n",@flist;
+
+        cmd("tar cvfz $p-sce-$v-$r.tar.gz $p-sce-$v");
+        my $tgz = abs_path("$p-sce-$v-$r.tar.gz");
+        rpmbuild($p,$v,$r,$e,$nr,$tgz,$files,$outdir);
+        _chdir("/tmp");
+        cmd("rm -rf /tmp/.makingrpm/*");
+    }
+}
+main();

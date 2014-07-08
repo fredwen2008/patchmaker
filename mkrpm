@@ -1,0 +1,90 @@
+#!/usr/bin/perl
+use Cwd;
+use Cwd 'abs_path';
+use Getopt::Long;
+use strict;
+
+sub cmd{
+    my $cmd = shift;
+    print "$cmd\n";
+    return `$cmd`;
+}
+
+sub _chdir{
+    my $dir = shift;
+    $dir =~ s/\s+$//;
+    my $old =`pwd`;
+    chomp($old);
+    chdir $dir;
+    my $new = `pwd`;
+    chomp($new);
+    print "cd $new\n";
+}
+
+my @ee_projects = qw(
+        rpmbuild-openstack-nova
+        rpmbuild-openstack-glance
+        rpmbuild-openstack-cinder
+        rpmbuild-openstack-keystone
+        rpmbuild-openstack-quantum
+        rpmbuild-python-novaclient
+        rpmbuild-python-glanceclient
+        rpmbuild-python-keystoneclient
+        rpmbuild-python-cinderclient
+        rpmbuild-python-quantumclient
+);
+
+sub prompt{
+    print "Usage: $0 -s dir\n";
+}
+
+sub main{
+    my ($help,$srcdir);
+    GetOptions("hep|h!"=>\$help,"s=s" => \$srcdir);
+    if($help or !$srcdir){
+        prompt();
+        exit;
+    }
+    die("$srcdir does not exist\n") if(!-d $srcdir);
+    _chdir $srcdir if($srcdir);
+    my $srcdir = cmd("pwd");
+    chomp($srcdir);
+    for my $proj(@ee_projects){
+        my $cur= cmd("pwd");
+        my $src = $proj;
+        $src =~ s/rpmbuild-openstack-//;
+        $src =~ s/rpmbuild-//;
+        if(-d "gts_rpmbuild/$proj" and -d "gts_openstack/$src"){
+            my $spec = cmd("ls gts_rpmbuild/$proj/SPECS/*.spec");
+            if($spec){
+                $spec = (split /\s+/,$spec)[0];
+                cmd("perl -pi -e 's/^(BuildRequires:\\s+python-sphinx)/#\$1/' $spec");
+                my $name = cmd("cat $spec |grep -i 'Name:'");
+                if($name){
+                    $name = (split /:\s+/,$name)[-1];
+                    chomp($name);
+                    print "$name\n";
+                }
+                my $version= cmd("cat $spec |grep -i 'Version:'");
+                if($version){
+                    $version= (split /:\s+/,$version)[-1];
+                    chomp($version);
+                    print "$version\n";
+                }
+                if($name and $version){
+                    cmd("rm -rf /tmp/$name-$version") if(-d "/tmp/$name-$version");
+                    cmd("cp -r gts_openstack/$src /tmp/$name-$version");
+                    _chdir("/tmp");
+                    cmd("tar cvfz $srcdir/gts_rpmbuild/$proj/SOURCES/$name-$version.tar.gz $name-$version");
+                    _chdir("$srcdir/gts_rpmbuild/$proj/");
+                    cmd("rm -rf $srcdir/gts_rpmbuild/$proj/RPMS");
+                    cmd("rm -rf $srcdir/gts_rpmbuild/$proj/SRPMS");
+                    cmd("rpmbuild --define '_topdir '`pwd` -bb SPECS/*.spec");
+                    _chdir($srcdir);
+                }
+            }
+        }
+    }
+}
+
+main();

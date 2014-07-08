@@ -1,0 +1,127 @@
+#!/usr/bin/perl
+use Cwd;
+use Cwd 'abs_path';
+use Getopt::Long;
+use strict;
+
+sub cmd{
+    my $cmd = shift;
+    print "$cmd\n";
+    return `$cmd`;
+}
+
+sub _chdir{
+    my $dir = shift;
+    $dir =~ s/\s+$//;
+    my $old =`pwd`;
+    chomp($old);
+    chdir $dir;
+    my $new = `pwd`;
+    chomp($new);
+    print "cd $new\n";
+}
+
+sub prompt{
+    print "Usage: $0\n";
+    print "       [-u] update source code from gitorious and make complete gts rpms, then uncompress thes rpms\n";
+    print "       [-d] download and uncompress osee rpms according to tag\n";
+    print "       [-p] compare uncompressed gts rpms with tag rpms then generate patch rpms\n";
+    print "       [-s] upload to yum repository\n";
+    print "       [-o] over write ee rpms in yum repository\n";
+    print "       [-e] update latest link\n";
+    print "       [-t tag] set tag\n";
+    print "       [-l url] set url\n";
+}
+
+sub main{
+    my ($help,$u,$d,$p,$s,$t,$l,$o,$e);
+    GetOptions("hep|h!"=>\$help,"t=s" => \$t,"l=s"=>\$l,"u!"=>\$u,"d!"=>\$d,"p!"=>\$p,"s!"=>\$s,"o!"=>\$o,"e!"=>\$e);
+    # -d, -p and -s need -t
+    if($help or (($d or $p or $s) and !$t) or (!$u and !$d and !$p and !$s) or ($o and !$s)){
+        prompt();
+        exit;
+    }
+
+    my $update_repo;
+    my $SCEHOME="/sce3";
+    my @repos = ( {'host'=>'192.168.122.1','dir' =>"/install"},
+                    {'host'=>'9.115.78.35','dir' =>"/var/www/html"});
+    my ($update_ee,$update_gts);
+    my $CUR=cmd("pwd");
+    my $SRC=cmd("dirname $0");
+    _chdir($SRC);
+
+    if($d and $t){
+        $l ||="http://rchgsa.ibm.com/projects/e/emsol/ccs/build/driver/osee-grizzly/openstack";
+        $l =~ s/\/$//;
+        $l =~ s/http:\/\///i;
+        cmd("./geteerpms -d $SCEHOME/baserpms -u http://$l/$t/");
+        cmd("./extractrpms -d $SCEHOME/baserpms/$t/ -o $SCEHOME/baserpms_source/$t/ -l basepkg.list"); 
+        if($s){
+            $update_ee = 1;
+        }
+    }
+
+    if($u){
+        cmd("./sceupdate -s $SCEHOME/src -u");
+        cmd("./mkrpm -s $SCEHOME/src");
+        cmd("./extractrpms -d $SCEHOME/src/ -o $SCEHOME/gtsrpms_source/ -l basepkg.list");
+    }
+
+    if($p and $t){
+        cmd("./getdiff2 -s $SCEHOME/baserpms_source/$t/ -n $SCEHOME/gtsrpms_source/ -o $SCEHOME/patches/$t");
+        cmd("./mkpatchrpm -p $SCEHOME/patches/$t -o $SCEHOME/gtsrpms/$t");
+        if($s){
+            $update_gts = 1;
+        }
+    }
+
+    if($s and $t and !$update_ee and !$update_gts){
+        $update_ee = $update_gts = 1;
+    }
+
+    for my $repo(@repos){
+        my $host = $repo->{'host'};
+        my $dir= $repo->{'dir'};
+        my $toc = 1;
+        if($update_ee){
+            my $re = cmd("ssh -l root $host ls $dir/sce3/rpms/ee/$t");
+            if($re){
+                if($o){
+                    cmd("ssh -l root $host rm -rf $dir/sce3/rpms/ee/$t");
+                }else{
+                    $toc = 0;
+                }
+            }
+            if($toc){
+                cmd("ssh -l root $host mkdir -p $dir/sce3/rpms/ee/$t");
+                cmd("scp -r $SCEHOME/baserpms/$t root\@$host:$dir/sce3/rpms/ee/");
+                $update_repo = 1;
+            }
+        }
+        if($update_gts){
+            cmd("ssh -l root $host rm -rf $dir/sce3/patches/$t");
+            cmd("ssh -l root $host mkdir -p $dir/sce3/patches/$t");
+            cmd("scp -r $SCEHOME/patches/$t/* root\@$host:$dir/sce3/patches/$t/");
+            cmd("ssh -l root $host rm -rf $dir/sce3/patch_rpms/$t");
+            cmd("ssh -l root $host mkdir -p $dir/sce3/patch_rpms/$t");
+            cmd("scp -r $SCEHOME/gtsrpms/$t/* root\@$host:$dir/sce3/patch_rpms/$t/");
+            if($e){
+                cmd("ssh -l root $host unlink $dir/sce3/rpms/gts/latest");
+                cmd("ssh -l root $host ln -s $dir/sce3/patch_rpms/$t $dir/sce3/rpms/gts/latest");
+            }
+            $update_repo = 1;
+        }
+    }
+
+    if($update_repo){
+        for my $repo(@repos){
+            my $host = $repo->{'host'};
+            my $dir= $repo->{'dir'};
+            cmd("ssh -l root $host createrepo $dir/sce3/rpms/");
+        }
+    }
+    _chdir($CUR);
+}
+
+main();

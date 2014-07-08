@@ -1,0 +1,152 @@
+#!/usr/bin/perl
+use Cwd;
+use Cwd 'abs_path';
+use Getopt::Long;
+use strict;
+
+sub cmd{
+    my $cmd = shift;
+    print "$cmd\n";
+    return `$cmd`;
+}
+
+sub _chdir{
+    my $dir = shift;
+    $dir =~ s/\s+$//;
+    my $old =`pwd`;
+    chomp($old);
+    chdir $dir;
+    my $new = `pwd`;
+    chomp($new);
+    print "cd $new\n";
+}
+
+my $gts_url= 'gitorious@gitorious.rch.stglabs.ibm.com:+gtssce-team/openstack-es/gtssce-';
+my $osee_url= 'gitorious@gitorious.rch.stglabs.ibm.com:/openstack-es/';
+my $gts_dir = 'gts_openstack';
+my @gts_projects = qw(
+        nova
+        glance
+        cinder
+        keystone
+        quantum
+        python-novaclient
+        python-glanceclient
+        python-keystoneclient
+        python-cinderclient
+        python-quantumclient
+            );
+
+my $rpmbuild_url= 'git://gitorious.rch.stglabs.ibm.com/rpmbuild-openstack/';
+my $rpmbuild_dir = 'gts_rpmbuild';
+my @rpmbuild_projects = qw(
+        rpmbuild-openstack-nova
+        rpmbuild-openstack-glance
+        rpmbuild-openstack-cinder
+        rpmbuild-openstack-keystone
+        rpmbuild-openstack-quantum
+        rpmbuild-python-novaclient
+        rpmbuild-python-glanceclient
+        rpmbuild-python-keystoneclient
+        rpmbuild-python-cinderclient
+        rpmbuild-python-quantumclient
+    );
+
+sub updateprojects{
+    my ($projects,$url,$update,$dir,$remote_url) = @_;
+    cmd("mkdir $dir") if(!-d $dir);
+    _chdir $dir; 
+    for my $p(@$projects){
+        my ($out,$cmd);
+        if(!-d $p){
+            cmd("git clone $url$p.git $p");
+        }
+        _chdir($p);
+        # make local branch to track osee-grizzly
+        $out = cmd("git branch -r");
+        my $branch = 'master';
+        if($out =~ /origin\/osee-grizzly/){
+            $branch =  'osee-grizzly';
+        } elsif($out =~ /origin\/osee-master/){
+            $branch =  'osee-master';
+        }
+        $out = cmd("git branch");
+        my $localbranch = 0;
+        for my $o(split /\n/,$out){
+            if($o =~ /^\s*$branch/){
+                cmd("git checkout $branch");
+                $localbranch = 1;
+                last;
+            }elsif($o =~ /^\s*\*\s*$branch/){
+                $localbranch = 1;
+                last;
+            }
+        }
+
+        if(!$localbranch){
+            cmd("git branch --track $branch origin/$branch");
+            cmd("git checkout $branch");
+        }
+
+        cmd("git reset --hard");
+        
+        if($update){
+            cmd("git pull");
+            if($remote_url){
+                $out = cmd("git remote show|grep '\\bee\\b'");
+                if(!$out){
+                    cmd("git remote add ee $remote_url$p.git");
+                }
+                cmd("git fetch ee");
+
+                $out = cmd("git branch");
+                $localbranch = 0;
+                for my $o(split /\n/,$out){
+                    if($o =~ /^\s*ee-$branch/){
+                        $localbranch = 1;
+                        last;
+                    }elsif($o =~ /^\s*\*\s*ee-$branch/){
+                        $localbranch = 1;
+                        last;
+                    }   
+                }   
+                if(!$localbranch){
+                    cmd("git branch --track ee-$branch ee/$branch");
+                }
+                cmd("git checkout ee-$branch");
+                cmd("git pull");
+                cmd("git checkout $branch");
+                cmd("git merge ee-$branch");
+                $out = cmd("git push");
+                print "$out\n";
+            }
+        }
+        my $diff = cmd("git diff");
+        print "$diff\n";
+        _chdir("..");
+    }
+    _chdir '..';
+}
+
+sub prompt{
+    print "Usage: $0 -s srcdir -u (update) -r (merge remote branch)\n";
+}
+
+sub main{
+    my ($update,$srcdir,$remote,$help);
+    GetOptions("hep|h!"=>\$help,"u!" => \$update,"s=s" => \$srcdir,"r!"=>\$remote);
+    if($help or !$srcdir){
+        prompt();
+        exit 0;
+    }
+    cmd("mkdir -p $srcdir") if(!-d $srcdir);
+    _chdir($srcdir);
+    if($remote){
+        updateprojects(\@gts_projects,$gts_url,$update,$gts_dir,$osee_url);
+    }else{
+        updateprojects(\@gts_projects,$gts_url,$update,$gts_dir);
+    }
+    updateprojects(\@rpmbuild_projects,$rpmbuild_url,$update,$rpmbuild_dir);
+}
+
+main();

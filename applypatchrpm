@@ -1,0 +1,36 @@
+#!/usr/bin/perl
+use strict;
+
+sub cmd{
+    my $cmd = shift;
+    print "$cmd\n";
+    return `$cmd`;
+}
+
+sub main{
+
+    if($ENV{USER} ne 'root'){
+        die "You are not root\n";
+    }
+
+    cmd("yum makecache;yum update -y");
+    # find all sce patch rpm in yum repo
+    my $sces = cmd("yum search sce");
+    for my $sce(split /\n/,$sces){
+        $sce =~ s/\s*:.*//;
+        next if($sce !~ /-sce\./);
+        my $installed = 0;
+        my $scepkg=~ s/-sce\..*/-sce/;
+        # check if the sce patch rpm is installed
+        $installed  = cmd("rpm -q $scepkg|grep -v 'not installed'");
+        next if($installed);
+        
+        # check if the base rpm of the sce patch is installed
+        my $eepkg=~ s/-sce.*//;
+        $installed = cmd("rpm -q $eepkg|grep -v 'not installed'");
+        next if(!$installed);
+        cmd("yum install -y $scepkg");
+    }
+}
+
+main();

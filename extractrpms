@@ -1,0 +1,89 @@
+#!/usr/bin/perl
+use Cwd;
+use Cwd 'abs_path';
+use Getopt::Long;
+use strict;
+
+sub cmd{
+    my $cmd = shift;
+    print "$cmd\n";
+    return `$cmd`;
+}
+
+sub _chdir{
+    my $dir = shift;
+    $dir =~ s/\s+$//;
+    my $old =`pwd`;
+    chomp($old);
+    chdir $dir;
+    my $new = `pwd`;
+    chomp($new);
+    print "cd $new\n";
+}
+
+sub rpminfo{
+    my $rpm = shift;
+    my $info = cmd("rpm -qpi $rpm|grep -E -i 'Name|Version|Release' |gawk '{print \$1 \$2 \$3}'");
+    my %info;
+    for my $l(split /\n/,$info){
+        my ($key,$value) = split /:/,$l;
+        $info{uc($key)} = $value;
+    }
+    my $repo = cmd("rpm  --query -p --qf '\%{EPOCH}' $rpm|grep -v none |grep -v grep");
+    $repo ||='0';
+    $info{'REPO'} = $repo;
+    return \%info;
+}
+
+sub prompt{
+    print "Usage: $0 -l pkglist -d pkgdir -o outputdir\n";
+}
+
+sub main{
+    my ($pkglistfile,$pkgdir,$outputdir,$help);
+    GetOptions("hep|h!"=>\$help,"l=s" => \$pkglistfile,"o=s"=>\$outputdir,"d=s" => \$pkgdir);
+    if(!$pkglistfile or !$pkgdir or !$outputdir or $help){
+        prompt();
+        exit;
+    }
+
+    if(! -f $pkglistfile){
+        die ("$pkglistfile does not exist\n");
+    }
+
+    if(! -d $pkgdir){
+        die ("$pkgdir does not exist\n");
+    }
+
+    my $allpkgs = cmd("find $pkgdir -name '*.rpm'");
+    my @allpkgs = split /\n/,$allpkgs;
+    
+    @allpkgs = map(abs_path($_),@allpkgs);    
+    my $epkgs= cmd("cat $pkglistfile");
+    my @epkgs = split /\n/,$epkgs;
+    my %epkgs;
+    for my $epkg(@epkgs){
+        $epkgs{$epkg} = 1;
+    }
+
+    cmd("rm -rf $outputdir") if(-d $outputdir);
+    cmd("mkdir -p $outputdir");
+    _chdir $outputdir;
+    
+    for my $pkg(@allpkgs){
+        my $info = rpminfo($pkg);
+        my $v = $info->{'VERSION'};
+        my $r = $info->{'RELEASE'};
+        my $e = $info->{'REPO'};
+        my $p = (split /\//,$pkg)[-1];
+        $p =~ s/-\d+.*//;
+        next if(!$epkgs{$p});
+        cmd("rm -rf $p") if(-d $p);
+        cmd("mkdir -p $p--$v--$r--$e");
+        _chdir "$p--$v--$r--$e";
+        cmd("rpm2cpio $pkg | cpio -idmv >/dev/null 2>/dev/null");
+        _chdir "..";
+    }
+}
+
+main();

@@ -1,0 +1,66 @@
+#!/usr/bin/perl
+use Cwd;
+use Cwd 'abs_path';
+use Getopt::Long;
+use strict;
+
+sub cmd{
+    my $cmd = shift;
+    print "$cmd\n";
+    return `$cmd`;
+}
+
+sub _chdir{
+    my $dir = shift;
+    $dir =~ s/\s+$//;
+    my $old =`pwd`;
+    chomp($old);
+    chdir $dir;
+    my $new = `pwd`;
+    chomp($new);
+    print "cd $new\n";
+}
+
+sub prompt{
+    print "Usage: $0 -s basesrcdir -n newsrcdir-o patchdir -i diff_exclude -p patch_include\n";
+}
+
+sub main{
+    my ($help,$basesrcdir,$newsrcdir,$patchdir,$df,$pf);
+    GetOptions("hep|h!"=>\$help,"s=s" => \$basesrcdir,"n=s" => \$newsrcdir,"o=s"=>\$patchdir,"i=s"=>\$df,"p=s"=>\$pf);
+    if($help or !$basesrcdir or !$newsrcdir or !$df or !$pf){
+        prompt();
+        exit;
+    }
+    die("$basesrcdir does not exist\n") if(!-d $basesrcdir);
+    die("$newsrcdir does not exist\n") if(!-d $newsrcdir);
+    die("$df does not exist\n") if(!-f $df);
+    die("$pf does not exist\n") if(!-f $pf);
+    $basesrcdir = abs_path($basesrcdir);
+    $newsrcdir = abs_path($newsrcdir);
+    $patchdir = abs_path($patchdir);
+    $df = abs_path($df);
+    $pf = abs_path($pf);
+    cmd("rm -rf $patchdir") if(!-d $patchdir);
+    cmd("mkdir -p $patchdir");
+    cmd("rm -rf /tmp/.comparing") if(-d "/tmp/.comparing");
+    cmd("mkdir -p /tmp/.comparing");
+    cmd("ln -s $basesrcdir /tmp/.comparing/baserpms_source");
+    cmd("ln -s $newsrcdir /tmp/.comparing/newrpms_source");
+    _chdir("/tmp/.comparing");
+    my $projs = cmd("ls newrpms_source");
+    my @projs = split /\n/,$projs;
+    my @projs = grep(-d "newrpms_source/$_",@projs);
+    for my $proj(@projs){
+        my $projname = (split /--/,$proj)[0];
+        my $oproj = cmd("ls -l baserpms_source/|grep $projname--|gawk '{print \$9}'");
+        $oproj =~ s/\s$//;
+        next if(!$oproj);
+        cmd("mkdir -p $patchdir/$oproj");
+        cmd("diff -ruN -X $df baserpms_source/$oproj/ newrpms_source/$proj/ |filterdiff -I $pf >$patchdir/$oproj/patch.diff");
+    }
+    _chdir("/tmp");
+    cmd("rm -rf .comparing");
+}
+
+main();

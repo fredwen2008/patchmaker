@@ -1,0 +1,133 @@
+#!/usr/bin/perl
+use Cwd;
+use Cwd 'abs_path';
+use Getopt::Long;
+use strict;
+
+sub cmd{
+    my $cmd = shift;
+    print "$cmd\n";
+    return `$cmd`;
+}
+
+sub _chdir{
+    my $dir = shift;
+    $dir =~ s/\s+$//;
+    my $old =`pwd`;
+    chomp($old);
+    chdir $dir;
+    my $new = `pwd`;
+    chomp($new);
+    print "cd $new\n";
+}
+
+sub _copy{
+    my ($src,$dest) = @_;
+    my @tmp = split /\//,$dest;
+    pop @tmp;
+    my $destdir = join '/',@tmp;
+    cmd("mkdir -p $destdir") if(!-d $destdir);
+    cmd("rm -f $dest") if(-f $dest);
+    cmd("cp $src $dest");
+}
+
+sub _isneed{
+    my $file = shift;
+    return 1 if($file =~ /\.(cfg|conf|filters|ini|json|py|sh|sql|xml)$/);
+    return 0;
+}
+
+sub prompt{
+    print "Usage: $0 -s basesrcdir -n newsrcdir-o patchdir -i diff_exclude -p patch_include\n";
+}
+
+sub main{
+    my ($help,$basesrcdir,$newsrcdir,$patchdir);
+    GetOptions("hep|h!"=>\$help,"s=s" => \$basesrcdir,"n=s" => \$newsrcdir,"o=s" =>\$patchdir);
+    if($help or !$basesrcdir or !$newsrcdir or !$patchdir){
+        prompt();
+        exit;
+    }
+    die("$basesrcdir does not exist\n") if(!-d $basesrcdir);
+    die("$newsrcdir does not exist\n") if(!-d $newsrcdir);
+
+    $basesrcdir = abs_path($basesrcdir);
+    $newsrcdir = abs_path($newsrcdir);
+    $patchdir = abs_path($patchdir);
+
+    cmd("rm -rf $patchdir") if(-d $patchdir);
+    cmd("mkdir -p $patchdir");
+
+    cmd("rm -rf /tmp/.comparing") if(-d "/tmp/.comparing");
+    cmd("mkdir -p /tmp/.comparing");
+
+    cmd("ln -s $basesrcdir /tmp/.comparing/old");
+    cmd("ln -s $newsrcdir /tmp/.comparing/new");
+    _chdir("/tmp/.comparing");
+
+    #get project list from the new directory
+    my $projs = cmd("ls new");
+    my @projs = split /\n/,$projs;
+    my @projs = grep(-d "new/$_",@projs);
+    for my $proj(@projs){
+        my $projname = (split /--/,$proj)[0];
+        my $patch_proj;
+        if(-d "old/$projname"){
+            $patch_proj= $projname;
+        }else{
+            $patch_proj= cmd("ls -l old/|grep $projname--|gawk '{print \$9}'");
+            $patch_proj=~ s/\s$//;
+        }
+        next if(!$patch_proj);
+        cmd("mkdir -p $patchdir/$patch_proj");
+
+        my $diff = cmd("LANG=en;diff -r -q old/$patch_proj/ new/$proj/|sort");
+    
+        for my $line(split /\n/,$diff){
+            my $old = '';
+            my $new = '';
+            #changed
+            if($line =~ /Files\s+old\/$patch_proj\/(\S+)\s+and\s+new\/$proj\/(\S+)\s+differ/){
+                $old = $1;
+                $new = $2;
+                if(!_isneed($old)){
+                    next;
+                }
+            #added
+            }elsif($line =~ /Only\s+in\s+new\/$proj\/(.*)/){
+                $new= $1;
+                $new=~ s/\s*:\s*/\//;
+                if(!_isneed($new)){
+                    next;
+                }
+            #deleted
+            }elsif($line =~ /Only\s+in\s+old\/$patch_proj\/(.*)/){
+                $old= $1;
+                $old=~ s/\s*:\s*/\//;
+                if(!_isneed($old)){
+                    next;
+                }
+            }
+            if($old){
+                cmd("cd old/$patch_proj;tar cf /tmp/.comparing/tmp.tar $old");
+                cmd("cd $patchdir/$patch_proj/;mkdir -p old;cd old;tar xf /tmp/.comparing/tmp.tar");
+            }
+            if($new){
+                cmd("cd new/$proj;tar cf /tmp/.comparing/tmp.tar $new");
+                cmd("cd $patchdir/$patch_proj/;mkdir -p new;cd new;tar xf /tmp/.comparing/tmp.tar");
+            }
+            if($old and $new){
+                cmd("echo \"Change:$old\" >>$patchdir/$patch_proj/changes.rec");
+            }elsif($old){
+                cmd("echo \"Remove:$old\" >>$patchdir/$patch_proj/changes.rec");
+            }elsif($new){
+                cmd("echo \"Add:$new\" >>$patchdir/$patch_proj/changes.rec");
+            }
+        } 
+
+    }
+    _chdir("/tmp");
+    cmd("rm -rf .comparing");
+}
+
+main();

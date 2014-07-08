@@ -1,0 +1,54 @@
+#!/usr/bin/perl
+use Cwd;
+use Cwd 'abs_path';
+use Getopt::Long;
+use strict;
+
+sub cmd{
+    my $cmd = shift;
+    print "$cmd\n";
+    return `$cmd`;
+}
+
+sub _chdir{
+    my $dir = shift;
+    $dir =~ s/\s+$//;
+    my $old =`pwd`;
+    chomp($old);
+    chdir $dir;
+    my $new = `pwd`;
+    chomp($new);
+    print "cd $new\n";
+}
+
+sub prompt{
+    print "Usage: $0 -s dir\n";
+}
+
+sub main{
+    my ($help,$srcdir);
+    GetOptions("hep|h!"=>\$help,"s=s" => \$srcdir);
+    if($help or !$srcdir){
+        prompt();
+        exit;
+    }
+    _chdir($srcdir);
+    my %files;
+    my $list = cmd("find . -type f");
+    for my $f(split  /\n/,$list){
+        my @tt = split /\//,$f,3;
+        push  @{$files{$tt[2]}},$tt[1];
+    }
+
+    for my $file(sort keys %files){
+        my $n = $#{$files{$file}};
+        if($n>0){
+            print "$file\n";
+            for my $p(@{$files{$file}}){
+                print "\t\t$p\n";
+            } 
+        }
+    }
+}
+
+main();
